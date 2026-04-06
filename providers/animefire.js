@@ -11,6 +11,12 @@ const HEADERS = {
 // ─── Lista de proxies CORS em cascata ────────────────────────────────────────
 
 const CORS_PROXIES = [
+    // codetabs é o único que funciona (confirmado por teste real)
+    {
+        name: 'codetabs',
+        build: (url) => `https://api.codetabs.com/v1/proxy/?quest=${url.includes('?') ? encodeURIComponent(url) : encodeURIComponent(url)}`,
+        parse: (resp) => resp
+    },
     {
         name: 'allorigins',
         build: (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
@@ -18,28 +24,18 @@ const CORS_PROXIES = [
             const json = await resp.json();
             if (!json.contents) throw new Error('No contents');
             return {
-                ok: resp.ok,
+                ok: true,
                 status: 200,
                 text: () => Promise.resolve(json.contents),
                 json: () => Promise.resolve(JSON.parse(json.contents))
             };
         }
-    },
-    {
-        name: 'corsproxy',
-        build: (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-        parse: (resp) => resp
-    },
-    {
-        name: 'codetabs',
-        build: (url) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(url)}`,
-        parse: (resp) => resp
     }
 ];
 
 /**
- * Wrapper async para fetch com proxy cascade.
- * Se a URL for do domínio BASE_URL, tenta cada proxy em sequencia.
+ * Wrapper para fetch com proxy cascade (contorno Cloudflare).
+ * Se a URL for do domínio animefire, tenta cada proxy em sequencia.
  * Caso contrario vai direto ao fetch original.
  */
 async function proxyFetch(url, options = {}) {
@@ -51,36 +47,30 @@ async function proxyFetch(url, options = {}) {
         try {
             const proxyUrl = proxy.build(url);
             const resp = await fetch(proxyUrl, options);
+            if (!resp.ok) continue;
 
-            // Allorigins retorna 200 mesmo se alvo deu 403 → checar conteudo
-            if (proxy.name === 'allorigins') {
-                const text = await resp.text();
-                if (text && text.length > 20 && !text.includes('<!DOCTYPE html>')) {
-                    return {
-                        ok: true, status: 200,
-                        text: () => Promise.resolve(text),
-                        json: () => Promise.resolve(JSON.parse(text))
-                    };
-                }
-                // Se veio pagina Cloudflare ou HTML generico, tenta proximo proxy
-                if (text.length < 1000 || text.includes('cf-') || text.includes('cloudflare')) {
-                    continue;
-                }
-                return {
-                    ok: true, status: 200,
-                    text: () => Promise.resolve(text),
-                    json: () => Promise.resolve(JSON.parse(text))
-                };
+            const text = await resp.text();
+            // Pula se veio erro 522 / página de erro
+            if (text.includes('error code') || text.includes('cf-') || text.includes('cloudflare')) {
+                continue;
+            }
+            // codetabs às vezes retorna HTML de landing → pular
+            if (proxy.name === 'codetabs' && text.length < 500 && !text.includes('data')) {
+                continue;
             }
 
-            if (!resp.ok) continue;
-            return proxy.parse(resp);
+            return {
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(text),
+                json: () => Promise.resolve(JSON.parse(text))
+            };
         } catch {
             continue;
         }
     }
 
-    // Fallback: tenta direto por via das duvidas
+    // Fallback final
     return fetch(url, options);
 }
 
@@ -435,3 +425,4 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = { getStreams };
 } else {
     global.getStreams = getStreams;
+}
