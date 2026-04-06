@@ -15,7 +15,7 @@ const VIDEO_HEADERS = {
     'Referer': BASE_URL
 };
 
-// ─── Buscar anime no AnimeFire (funciona direto — Cloudflare libera HTML) ──
+// ─── Buscar anime no AnimeFire (todos os resultados) ─────────────────────────
 
 async function searchAnimeFire(title) {
     const slug = titleToSlug(title);
@@ -24,28 +24,34 @@ async function searchAnimeFire(title) {
     try {
         const resp = await fetch(url, { headers: SEARCH_HEADERS });
         if (!resp.ok) return [];
-        const html = await resp.text();
+        const rawHtml = await resp.text();
 
-        // Extrair links: <a href="https://animefire.io/animes/{slug}">
-        // slug termina em "-todos-os-episodios"
         const items = [];
-        const regex = /href="(https?:\/\/animefire\.io\/(?:animes|filmes)\/([^"]+))"/g;
+        const seen = new Set();
+        const regex = /<a(?=[^>]*\bhref="(https?:\/\/animefire\.io\/(?:animes|filmes)\/[^"]+)")[^>]*>([\s\S]*?)<\/a>/g;
         let m;
-        while ((m = regex.exec(html)) !== null) {
-            const fullUrl = m[1];
-            const rawSlug = m[2];
-            if (rawSlug.toLowerCase().includes('todos-os-episodios')) {
-                // Extrair titulo do card: <h3 class="animeTitle">Nome</h3>
-                const cardHtml = html.substring(Math.max(0, m.index - 500), m.index + 500);
-                const titleMatch = cardHtml.match(/class="animeTitle"\s*>\s*([^<]+)</);
-                const displayTitle = titleMatch ? titleMatch[1].trim() : rawSlug;
 
-                items.push({
-                    url: fullUrl,
-                    rootSlug: rawSlug.replace(/-todos-os-episodios$/i, ''),
-                    displayTitle: displayTitle
-                });
-            }
+        while ((m = regex.exec(rawHtml)) !== null) {
+            const fullUrl = m[1];
+            const cardHtml = m[2];
+
+            // Extrair titulo do card
+            const titleMatch = cardHtml.match(/animeTitle[^>]*>\s*([^<]+)</);
+            if (!titleMatch) continue;
+
+            const rawSlug = fullUrl.replace(BASE_URL + '/', '').split('/')[1] || '';
+            if (!rawSlug.toLowerCase().includes('todos-os-episodios')) continue;
+            if (seen.has(fullUrl)) continue;
+            seen.add(fullUrl);
+
+            const displayTitle = titleMatch[1].trim();
+            const isDubbed = rawSlug.toLowerCase().includes('dublado');
+            const rootSlug = rawSlug.replace(/-todos-os-episodios$/i, '');
+
+            // Determinar temporada pelo slug
+            let season = detectSeason(rootSlug);
+
+            items.push({ rootSlug, isDubbed, displayTitle, season });
         }
         return items;
     } catch {
@@ -53,9 +59,38 @@ async function searchAnimeFire(title) {
     }
 }
 
+// ─── Detectar numero da temporada pelo slug ──────────────────────────────────
+
+function detectSeason(slug) {
+    const s = slug.toLowerCase();
+
+    // Padrões conhecidos: "-season-X", "-sX", "-X-" no fim, "Xnd-season" (2nd)
+    // Ex: spy-x-family-season-3
+    let m = s.match(/(?:^|[-])season[-](\d+)$/);
+    if (m) return parseInt(m[1]);
+
+    // Ex: one-punch-man-2nd-season, one-punch-man-3rd-season
+    m = s.match(/(\d+)(?:st|nd|rd|th)\s*-season|season[-](\d+)/);
+    if (m) return parseInt(m[1] || m[2]);
+
+    // Ex: anime-s2, anime-s3
+    m = s.match(/-s(\d+)$/);
+    if (m) return parseInt(m[1]);
+
+    // Ex: anime-2, anime-3 (numero solto no fim)
+    m = s.match(/-(\d+)$/);
+    if (m) {
+        const n = parseInt(m[1]);
+        if (n > 0 && n < 50) return n;
+    }
+
+    // Se nao tem numero de temporada → temporada 1
+    return 1;
+}
+
 // ─── Chamar API /video/ (sem Cloudflare) ────────────────────────────────────
 
-async function extractVideoStreams(rootSlug, episodeNum) {
+async function extractVideoStreams(rootSlug, episodeNum, isDubbed) {
     if (!rootSlug || !episodeNum) return [];
 
     const timestamp = Math.floor(Date.now() / 1000);
@@ -72,6 +107,8 @@ async function extractVideoStreams(rootSlug, episodeNum) {
         const data = json?.data;
         if (!data || data.length === 0) return [];
 
+        const audioLabel = isDubbed ? 'Dublado' : 'Legendado';
+
         return data
             .filter(item => item.src)
             .map(item => {
@@ -84,8 +121,8 @@ async function extractVideoStreams(rootSlug, episodeNum) {
                 }
                 return {
                     url: item.src,
-                    name: `AnimeFire ${qualityLabel}`,
-                    title: qualityLabel,
+                    name: `AnimeFire ${audioLabel} ${qualityLabel}`,
+                    title: `${audioLabel}`,
                     quality: quality,
                     type: item.src.includes('.m3u8') ? 'hls' : 'mp4',
                     headers: {
@@ -161,25 +198,35 @@ async function getStreams(tmdbId, mediaType, season, episode) {
     const targetEpisode = mediaType === 'movie' ? 1 : episode;
 
     try {
-        // 1) Obter titulos possiveis
         const titles = await getAniListTitles(tmdbId, mediaType);
         if (!titles.length) return [];
 
-        // 2) Para cada titulo, buscar no site → pegar slug → chamar /video/
+        const allStreams = [];
+        const triedSlugs = new Set();
+
+        // 1) Buscar em todos os titulos e coletar TODOS os resultados
         for (const titleInfo of titles) {
             const animeLinks = await searchAnimeFire(titleInfo.name);
             if (!animeLinks.length) continue;
 
-            // Primeiro resultado = mais relevante
-            const { rootSlug } = animeLinks[0];
+            // 2) Filtrar apenas pela temporada correta
+            const seasonMatches = animeLinks.filter(item => item.season === targetSeason);
 
-            const streams = await extractVideoStreams(rootSlug, targetEpisode);
-            if (streams.length > 0) {
-                return streams.sort((a, b) => b.quality - a.quality);
+            for (const item of seasonMatches) {
+                if (triedSlugs.has(item.rootSlug)) continue;
+                triedSlugs.add(item.rootSlug);
+
+                const streams = await extractVideoStreams(item.rootSlug, targetEpisode, item.isDubbed);
+                if (streams.length > 0) {
+                    allStreams.push(...streams);
+                }
             }
+
+            // Se ja encontrou streams, nao precisa buscar pelo proximo titulo
+            if (allStreams.length > 0) break;
         }
 
-        return [];
+        return allStreams.sort((a, b) => b.quality - a.quality);
     } catch {
         return [];
     }
