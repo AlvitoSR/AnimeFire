@@ -182,6 +182,8 @@ async function getAniListTitles(tmdbId, mediaType) {
     }
     if (media?.synonyms) {
         for (const syn of media.synonyms) {
+            if (syn.length < 4) continue; // Sinônimos curtos como "OPM" geram falsos positivos
+            if (/[\u3000-\u9fff\u0600-\u06ff\u0400-\u04ff\u0590-\u05ff\u0e00-\u0e7f]/.test(syn)) continue; // Ignorar JP/AR/RU/HE/TH
             if (!titles.some(t => t.name.toLowerCase() === syn.toLowerCase())) {
                 titles.push({ name: syn, type: 'synonym' });
             }
@@ -209,8 +211,19 @@ async function getStreams(tmdbId, mediaType, season, episode) {
             const animeLinks = await searchAnimeFire(titleInfo.name);
             if (!animeLinks.length) continue;
 
-            // 2) Filtrar apenas pela temporada correta
-            const seasonMatches = animeLinks.filter(item => item.season === targetSeason);
+            // 2) Validar que os resultados correspondem ao titulo buscado
+            // Se busca "One Punch Man", os resultados devem conter "one" + "punch" ou "punch" + "man" no slug
+            const searchTitleForValidation = titleToSlug(titleInfo.name);
+            const titleWords = searchTitleForValidation.split('-').filter(w => w.length > 2);
+            const validLinks = animeLinks.filter(item => {
+                // Se tem mais de uma palavra com >2 chars, exigir pelo menos uma correspondencia
+                if (titleWords.length === 0) return true;
+                const matchesAnyWord = titleWords.some(word => item.rootSlug.toLowerCase().includes(word));
+                return matchesAnyWord;
+            });
+
+            // 3) Filtrar apenas pela temporada correta
+            const seasonMatches = validLinks.filter(item => item.season === targetSeason);
 
             for (const item of seasonMatches) {
                 if (triedSlugs.has(item.rootSlug)) continue;
