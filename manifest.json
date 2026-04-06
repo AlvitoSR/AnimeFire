@@ -1,11 +1,9 @@
 {
-  "id": "animefire-br",
-  "name": "AnimeFire",
-  "description": "Site brasileiro de animes em português (dublado e legendado). Inclui suporte a streams Lightspeed e Blogger.",
-  "version": "1.0.0",
-  "author": "lawlietbr (port para Nuvio)",
-  "language": "pt-BR",
-  "supportedTypes": ["movie", "tv"],
-  "filename": "providers/animefire.js",
-  "enabled": true
+  "name": "Meus Plugins",
+  "plugins": [
+    {
+      "name": "AnimeFire",
+      "url": "https://raw.githubusercontent.com/AlvitoSR/nuvio-configs/main/providers/animefire.js"
+    }
+  ]
 }
