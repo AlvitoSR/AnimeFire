@@ -1,252 +1,223 @@
-const TMDB_API_KEY = 'c6c6f4c1cb446e0d5c305f3fa7eeb4a9';
-const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
-const BASE_URL = 'https://animefire.io';
+const TMDB_API_KEY = 'c6c6f4c1cb446e0d5c305f3fa7eeb4a9'; const TMDB_BASE_URL = 'https://api.themoviedb.org/3'; const BASE_URL = 'https://animefire.io';
 
-const SEARCH_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'pt-BR,pt;q=0.9',
-    'Referer': BASE_URL + '/'
-};
+const SEARCH_HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,/;q=0.8', 'Accept-Language': 'pt-BR,pt;q=0.9', 'Referer': BASE_URL + '/' };
 
-const VIDEO_HEADERS = {
-    'X-Requested-With': 'XMLHttpRequest',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Referer': BASE_URL
-};
+const VIDEO_HEADERS = { 'X-Requested-With': 'XMLHttpRequest', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': BASE_URL };
 
-// ─── Buscar anime no AnimeFire (todos os resultados) ─────────────────────────
+const slugCache = new Map();
 
-async function searchAnimeFire(title) {
-    const slug = titleToSlug(title);
-    const url = `${BASE_URL}/pesquisar/${slug}`;
+// ─── Buscar anime (APENAS /animes/) ───────────────────────── async function searchAnimeFire(title) { const slug = titleToSlug(title); const url = ${BASE_URL}/pesquisar/${slug};
 
-    try {
-        const resp = await fetch(url, { headers: SEARCH_HEADERS });
-        if (!resp.ok) return [];
-        const rawHtml = await resp.text();
+try {
+    const resp = await fetch(url, { headers: SEARCH_HEADERS });
+    if (!resp.ok) return [];
+    const rawHtml = await resp.text();
 
-        const items = [];
-        const seen = new Set();
-        const regex = /<a(?=[^>]*\bhref="(https?:\/\/animefire\.io\/(?:animes|filmes)\/[^"]+)")[^>]*>([\s\S]*?)<\/a>/g;
-        let m;
+    const items = [];
+    const seen = new Set();
 
-        while ((m = regex.exec(rawHtml)) !== null) {
-            const fullUrl = m[1];
-            const cardHtml = m[2];
+    const regex = /<a(?=[^>]*\bhref="(https?:\/\/animefire\.io\/animes\/[^\"]+)")[^>]*>([\s\S]*?)<\/a>/g;
+    let m;
 
-            // Extrair titulo do card
-            const titleMatch = cardHtml.match(/animeTitle[^>]*>\s*([^<]+)</);
-            if (!titleMatch) continue;
+    while ((m = regex.exec(rawHtml)) !== null) {
+        const fullUrl = m[1];
+        const cardHtml = m[2];
 
-            const rawSlug = fullUrl.replace(BASE_URL + '/', '').split('/')[1] || '';
-            if (!rawSlug.toLowerCase().includes('todos-os-episodios')) continue;
-            if (seen.has(fullUrl)) continue;
-            seen.add(fullUrl);
+        const titleMatch = cardHtml.match(/animeTitle[^>]*>\s*([^<]+)</);
+        if (!titleMatch) continue;
 
-            const displayTitle = titleMatch[1].trim();
-            const isDubbed = rawSlug.toLowerCase().includes('dublado');
-            const rootSlug = rawSlug.replace(/-todos-os-episodios$/i, '');
+        const rawSlug = fullUrl.replace(BASE_URL + '/', '').split('/')[1] || '';
+        if (!rawSlug.toLowerCase().includes('todos-os-episodios')) continue;
+        if (seen.has(fullUrl)) continue;
+        seen.add(fullUrl);
 
-            // Determinar temporada pelo slug
-            let season = detectSeason(rootSlug);
+        const displayTitle = titleMatch[1].trim();
+        const isDubbed = rawSlug.toLowerCase().includes('dublado');
+        const rootSlug = rawSlug.replace(/-todos-os-episodios$/i, '');
 
-            items.push({ rootSlug, isDubbed, displayTitle, season });
-        }
-        return items;
-    } catch {
-        return [];
+        let season = detectSeason(rootSlug);
+
+        items.push({ rootSlug, isDubbed, displayTitle, season });
     }
+    return items;
+} catch {
+    return [];
 }
 
-// ─── Detectar numero da temporada pelo slug ──────────────────────────────────
-
-function detectSeason(slug) {
-    const s = slug.toLowerCase();
-
-    // Padrões conhecidos: "-season-X", "-sX", "-X-" no fim, "Xnd-season" (2nd)
-    // Ex: spy-x-family-season-3
-    let m = s.match(/(?:^|[-])season[-](\d+)$/);
-    if (m) return parseInt(m[1]);
-
-    // Ex: one-punch-man-2nd-season, one-punch-man-3rd-season
-    m = s.match(/(\d+)(?:st|nd|rd|th)\s*-season|season[-](\d+)/);
-    if (m) return parseInt(m[1] || m[2]);
-
-    // Ex: anime-s2, anime-s3
-    m = s.match(/-s(\d+)$/);
-    if (m) return parseInt(m[1]);
-
-    // Ex: anime-2, anime-3 (numero solto no fim)
-    m = s.match(/-(\d+)$/);
-    if (m) {
-        const n = parseInt(m[1]);
-        if (n > 0 && n < 50) return n;
-    }
-
-    // Se nao tem numero de temporada → temporada 1
-    return 1;
 }
 
-// ─── Chamar API /video/ (sem Cloudflare) ────────────────────────────────────
+function detectSeason(slug) { const s = slug.toLowerCase();
 
-async function extractVideoStreams(rootSlug, episodeNum, isDubbed) {
-    if (!rootSlug || !episodeNum) return [];
+let m = s.match(/(?:^|[-])season[-](\d+)$/);
+if (m) return parseInt(m[1]);
 
-    const timestamp = Math.floor(Date.now() / 1000);
-    const url = `${BASE_URL}/video/${rootSlug}/${episodeNum}?tempsubs=0&${timestamp}`;
+m = s.match(/(\d+)(?:st|nd|rd|th)\s*-season|season[-](\d+)/);
+if (m) return parseInt(m[1] || m[2]);
 
-    try {
-        const resp = await fetch(url, { headers: VIDEO_HEADERS });
-        if (!resp.ok) return [];
+m = s.match(/-s(\d+)$/);
+if (m) return parseInt(m[1]);
 
-        const text = await resp.text();
-        if (text.length < 30) return [];
+m = s.match(/-(\d+)$/);
+if (m) {
+    const n = parseInt(m[1]);
+    if (n > 0 && n < 50) return n;
+}
 
-        const json = JSON.parse(text);
-        const data = json?.data;
-        if (!data || data.length === 0) return [];
+return 1;
 
-        const audioLabel = isDubbed ? 'Dublado' : 'Legendado';
+}
 
-        return data
-            .filter(item => item.src)
-            .map(item => {
-                let quality = 360;
-                let qualityLabel = item.label || '360p';
-                const numMatch = qualityLabel.match(/\d+/);
-                if (numMatch) {
-                    const n = parseInt(numMatch[0]);
-                    quality = n >= 1080 ? 1080 : n >= 720 ? 720 : n >= 480 ? 480 : 360;
+async function extractVideoStreams(rootSlug, episodeNum, isDubbed) { if (!rootSlug || !episodeNum) return [];
+
+const timestamp = Math.floor(Date.now() / 1000);
+const url = `${BASE_URL}/video/${rootSlug}/${episodeNum}?tempsubs=0&${timestamp}`;
+
+try {
+    const resp = await fetch(url, { headers: VIDEO_HEADERS });
+    if (!resp.ok) return [];
+
+    const text = await resp.text();
+    if (text.length < 30) return [];
+
+    const json = JSON.parse(text);
+    const data = json?.data;
+    if (!data || data.length === 0) return [];
+
+    const audioLabel = isDubbed ? 'Dublado' : 'Legendado';
+
+    return data
+        .filter(item => item.src)
+        .map(item => {
+            let quality = 360;
+            let qualityLabel = item.label || '360p';
+            const numMatch = qualityLabel.match(/\d+/);
+            if (numMatch) {
+                const n = parseInt(numMatch[0]);
+                quality = n >= 1080 ? 1080 : n >= 720 ? 720 : n >= 480 ? 480 : 360;
+            }
+            return {
+                url: item.src,
+                name: `AnimeFire ${audioLabel} ${qualityLabel}`,
+                title: `${audioLabel}`,
+                quality: quality,
+                type: item.src.includes('.m3u8') ? 'hls' : 'mp4',
+                headers: {
+                    'Referer': BASE_URL,
+                    'User-Agent': 'Mozilla/5.0'
                 }
-                return {
-                    url: item.src,
-                    name: `AnimeFire ${audioLabel} ${qualityLabel}`,
-                    title: `${audioLabel}`,
-                    quality: quality,
-                    type: item.src.includes('.m3u8') ? 'hls' : 'mp4',
-                    headers: {
-                        'Referer': BASE_URL,
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                    }
-                };
-            });
-    } catch {
-        return [];
-    }
+            };
+        });
+} catch {
+    return [];
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function titleToSlug(title) {
-    if (!title) return '';
-    return title.toLowerCase()
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '');
 }
 
-// ─── AniList → titulos alternativos ─────────────────────────────────────────
+function titleToSlug(title) { if (!title) return ''; return title.toLowerCase() .normalize('NFD').replace(/[\u0300-\u036f]/g, '') .replace(/[^a-z0-9]+/g, '-') .replace(/^-|-$/g, ''); }
 
-async function getAniListTitles(tmdbId, mediaType) {
-    const endpoint = mediaType === 'tv' ? 'tv' : 'movie';
-    const tmdbUrl = `${TMDB_BASE_URL}/${endpoint}/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US`;
+function normalizeSlug(s) { return s.toLowerCase().replace(/[^a-z0-9]/g, ''); }
 
-    const tmdbResp = await fetch(tmdbUrl);
-    if (!tmdbResp.ok) return [];
-    const tmdbData = await tmdbResp.json();
-    const searchTitle = mediaType === 'tv' ? tmdbData.name : tmdbData.title;
+async function getAniListTitles(tmdbId, mediaType) { const endpoint = mediaType === 'tv' ? 'tv' : 'movie'; const tmdbUrl = ${TMDB_BASE_URL}/${endpoint}/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US;
 
-    const query = `
-        query ($search: String) {
-            Media(search: $search, type: ANIME) {
-                title { romaji english }
-                synonyms
-            }
-        }`;
+const tmdbResp = await fetch(tmdbUrl);
+if (!tmdbResp.ok) return [];
+const tmdbData = await tmdbResp.json();
 
-    const anilistResp = await fetch('https://graphql.anilist.co', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, variables: { search: searchTitle } })
-    });
+const searchTitle = mediaType === 'tv' ? tmdbData.name : tmdbData.title;
 
-    if (!anilistResp.ok) return [{ name: searchTitle, type: 'tmdb' }];
-    const anilistData = await anilistResp.json();
-    const media = anilistData?.data?.Media;
+const query = `
+    query ($search: String) {
+        Media(search: $search, type: ANIME) {
+            title { romaji english }
+            synonyms
+        }
+    }`;
 
-    const titles = [];
-    if (media?.title?.romaji) titles.push({ name: media.title.romaji, type: 'romaji' });
-    if (media?.title?.english && media.title.english !== media.title.romaji) {
-        titles.push({ name: media.title.english, type: 'english' });
-    }
-    if (media?.synonyms) {
-        for (const syn of media.synonyms) {
-            if (syn.length < 4) continue; // Sinônimos curtos como "OPM" geram falsos positivos
-            if (/[\u3000-\u9fff\u0600-\u06ff\u0400-\u04ff\u0590-\u05ff\u0e00-\u0e7f]/.test(syn)) continue; // Ignorar JP/AR/RU/HE/TH
-            if (!titles.some(t => t.name.toLowerCase() === syn.toLowerCase())) {
-                titles.push({ name: syn, type: 'synonym' });
-            }
+const anilistResp = await fetch('https://graphql.anilist.co', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, variables: { search: searchTitle } })
+});
+
+if (!anilistResp.ok) return [{ name: searchTitle }];
+const anilistData = await anilistResp.json();
+const media = anilistData?.data?.Media;
+
+const titles = [];
+
+if (media?.title?.romaji) titles.push({ name: media.title.romaji });
+if (media?.title?.english) titles.push({ name: media.title.english });
+
+if (media?.synonyms) {
+    for (const syn of media.synonyms) {
+        if (syn.length < 4) continue;
+        if (!titles.some(t => t.name.toLowerCase() === syn.toLowerCase())) {
+            titles.push({ name: syn });
         }
     }
-    if (titles.length === 0) titles.push({ name: searchTitle, type: 'tmdb' });
-    return titles;
 }
 
-// ─── getStreams ──────────────────────────────────────────────────────────────
+if (titles.length === 0) titles.push({ name: searchTitle });
 
-async function getStreams(tmdbId, mediaType, season, episode) {
-    const targetSeason = mediaType === 'movie' ? 1 : season;
-    const targetEpisode = mediaType === 'movie' ? 1 : episode;
+return titles;
 
-    try {
-        const titles = await getAniListTitles(tmdbId, mediaType);
-        if (!titles.length) return [];
+}
 
-        const allStreams = [];
-        const triedSlugs = new Set();
+async function getStreams(tmdbId, mediaType, season, episode) { const targetSeason = mediaType === 'movie' ? 1 : season; const targetEpisode = mediaType === 'movie' ? 1 : episode;
 
-        // 1) Buscar em todos os titulos e coletar TODOS os resultados
-        for (const titleInfo of titles) {
-            const animeLinks = await searchAnimeFire(titleInfo.name);
-            if (!animeLinks.length) continue;
+try {
+    // CACHE direto
+    if (slugCache.has(tmdbId)) {
+        return await extractVideoStreams(slugCache.get(tmdbId), targetEpisode, false);
+    }
 
-            // 2) Validar que os resultados correspondem ao titulo buscado
-            // Se busca "One Punch Man", os resultados devem conter "one" + "punch" ou "punch" + "man" no slug
-            const searchTitleForValidation = titleToSlug(titleInfo.name);
-            const titleWords = searchTitleForValidation.split('-').filter(w => w.length > 2);
-            const validLinks = animeLinks.filter(item => {
-                // Se tem mais de uma palavra com >2 chars, exigir pelo menos uma correspondencia
-                if (titleWords.length === 0) return true;
-                const matchesAnyWord = titleWords.some(word => item.rootSlug.toLowerCase().includes(word));
-                return matchesAnyWord;
-            });
+    const titles = await getAniListTitles(tmdbId, mediaType);
+    if (!titles.length) return [];
 
-            // 3) Filtrar apenas pela temporada correta
-            const seasonMatches = validLinks.filter(item => item.season === targetSeason);
+    const allStreams = [];
+    const triedSlugs = new Set();
 
-            for (const item of seasonMatches) {
-                if (triedSlugs.has(item.rootSlug)) continue;
-                triedSlugs.add(item.rootSlug);
+    for (const titleInfo of titles) {
+        const animeLinks = await searchAnimeFire(titleInfo.name);
+        if (!animeLinks.length) continue;
 
-                const streams = await extractVideoStreams(item.rootSlug, targetEpisode, item.isDubbed);
-                if (streams.length > 0) {
-                    allStreams.push(...streams);
-                }
-            }
+        const normalizedSearch = normalizeSlug(titleInfo.name);
+        const titleWords = titleToSlug(titleInfo.name).split('-').filter(w => w.length > 2);
 
-            // Se ja encontrou streams, nao precisa buscar pelo proximo titulo
-            if (allStreams.length > 0) break;
+        const validLinks = animeLinks.filter(item => {
+            const slug = normalizeSlug(item.rootSlug);
+
+            if (slug.includes(normalizedSearch)) return true;
+
+            const matchesCount = titleWords.filter(word => slug.includes(word)).length;
+            return matchesCount >= Math.min(2, titleWords.length);
+        });
+
+        let seasonMatches = validLinks.filter(item => item.season === targetSeason);
+
+        if (seasonMatches.length === 0) {
+            seasonMatches = validLinks;
         }
 
-        return allStreams.sort((a, b) => b.quality - a.quality);
-    } catch {
-        return [];
+        for (const item of seasonMatches) {
+            if (triedSlugs.has(item.rootSlug)) continue;
+            triedSlugs.add(item.rootSlug);
+
+            const streams = await extractVideoStreams(item.rootSlug, targetEpisode, item.isDubbed);
+            if (streams.length > 0) {
+                slugCache.set(tmdbId, item.rootSlug);
+                allStreams.push(...streams);
+            }
+        }
+
+        if (allStreams.length > 0) break;
     }
+
+    return allStreams.sort((a, b) => b.quality - a.quality);
+} catch {
+    return [];
 }
 
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { getStreams };
-} else {
-    global.getStreams = getStreams;
 }
+
+if (typeof module !== 'undefined' && module.exports) { module.exports = { getStreams }; } else { global.getStreams = getStreams; }
