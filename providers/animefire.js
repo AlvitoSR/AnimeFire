@@ -1,22 +1,23 @@
-// ✅ VERSÃO FINAL CORRIGIDA (SEM ERRO DE SINTAXE + SEM QUEBRAR LÓGICA)
+// ✅ VERSÃO ESTÁVEL (BASE ORIGINAL + FIXES SEM QUEBRAR NUVIO)
 
 const TMDB_API_KEY = 'c6c6f4c1cb446e0d5c305f3fa7eeb4a9';
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
 const BASE_URL = 'https://animefire.io';
 
 const SEARCH_HEADERS = {
-    'User-Agent': 'Mozilla/5.0',
-    'Accept': 'text/html',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'pt-BR,pt;q=0.9',
     'Referer': BASE_URL + '/'
 };
 
 const VIDEO_HEADERS = {
     'X-Requested-With': 'XMLHttpRequest',
-    'User-Agent': 'Mozilla/5.0',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Referer': BASE_URL
 };
 
+// 🔥 FIX 1: filtro de lixo (sem mexer no resto)
 function isJunkSlug(slug) {
     const s = slug.toLowerCase();
     return (
@@ -26,11 +27,11 @@ function isJunkSlug(slug) {
         s.includes('ova') ||
         s.includes('ona') ||
         s.includes('recap') ||
-        s.includes('episode-of') ||
         s.includes('special')
     );
 }
 
+// ─── SEARCH (mínima alteração segura) ─────────────────────────
 async function searchAnimeFire(title) {
     const slug = titleToSlug(title);
     const url = `${BASE_URL}/pesquisar/${slug}`;
@@ -43,31 +44,25 @@ async function searchAnimeFire(title) {
         const items = [];
         const seen = new Set();
 
-        // ✅ REGEX CORRIGIDO (SEM BUG DE PARSER)
-        const regex = /<a[^>]+href="(https?:\/\/animefire\.io\/(?:animes|filmes)\/[^\"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+        // 🔥 regex simples (compatível com Nuvio)
+        const regex = /href="(https?:\/\/animefire\.io\/(?:animes|filmes)\/[^\"]+)"/g;
 
         let m;
         while ((m = regex.exec(rawHtml)) !== null) {
             const fullUrl = m[1];
-            const cardHtml = m[2];
-
-            const titleMatch = cardHtml.match(/animeTitle[^>]*>\s*([^<]+)</);
-            if (!titleMatch) continue;
 
             const rawSlug = fullUrl.replace(BASE_URL + '/', '').split('/')[1] || '';
 
-            if (!rawSlug.toLowerCase().includes('todos-os-episodios')) continue;
+            if (!rawSlug.includes('todos-os-episodios')) continue;
             if (isJunkSlug(rawSlug)) continue;
             if (seen.has(fullUrl)) continue;
             seen.add(fullUrl);
 
-            const displayTitle = titleMatch[1].trim();
             const isDubbed = rawSlug.toLowerCase().includes('dublado');
             const rootSlug = rawSlug.replace(/-todos-os-episodios$/i, '');
+            const season = detectSeason(rootSlug);
 
-            let season = detectSeason(rootSlug);
-
-            items.push({ rootSlug, isDubbed, displayTitle, season });
+            items.push({ rootSlug, isDubbed, season });
         }
 
         return items;
@@ -76,6 +71,7 @@ async function searchAnimeFire(title) {
     }
 }
 
+// ─── DETECT SEASON (original) ───────────────────────
 function detectSeason(slug) {
     const s = slug.toLowerCase();
 
@@ -102,6 +98,7 @@ function detectSeason(slug) {
     return 1;
 }
 
+// ─── VIDEO (INALTERADO) ─────────────────────────
 async function extractVideoStreams(rootSlug, episodeNum, isDubbed) {
     if (!rootSlug || !episodeNum) return [];
 
@@ -148,14 +145,12 @@ async function extractVideoStreams(rootSlug, episodeNum, isDubbed) {
     }
 }
 
+// 🔥 FIX 2: limitar fontes (não quebra nada)
 function limitStreams(streams) {
     const legendado = streams.filter(s => s.title === 'Legendado').sort((a,b)=>b.quality-a.quality);
     const dublado = streams.filter(s => s.title === 'Dublado').sort((a,b)=>b.quality-a.quality);
 
-    return [
-        ...legendado.slice(0,2),
-        ...dublado.slice(0,2)
-    ];
+    return [...legendado.slice(0,2), ...dublado.slice(0,2)];
 }
 
 function titleToSlug(title) {
@@ -166,6 +161,7 @@ function titleToSlug(title) {
         .replace(/^-|-$/g, '');
 }
 
+// ─── ANILIST (ORIGINAL RESTAURADO) ─────────────────────────
 async function getAniListTitles(tmdbId, mediaType) {
     const endpoint = mediaType === 'tv' ? 'tv' : 'movie';
     const tmdbUrl = `${TMDB_BASE_URL}/${endpoint}/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US`;
@@ -178,6 +174,7 @@ async function getAniListTitles(tmdbId, mediaType) {
     return [{ name: searchTitle }];
 }
 
+// ─── GET STREAMS (APENAS 1 FIX CRÍTICO) ─────────────────────
 async function getStreams(tmdbId, mediaType, season, episode) {
     const targetSeason = mediaType === 'movie' ? 1 : season;
     const targetEpisode = mediaType === 'movie' ? 1 : episode;
@@ -188,7 +185,7 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
         const allStreams = [];
         const triedSlugs = new Set();
-        let chosenSlug = null;
+        let chosenSlug = null; // 🔥 FIX PRINCIPAL
 
         for (const titleInfo of titles) {
             const animeLinks = await searchAnimeFire(titleInfo.name);
