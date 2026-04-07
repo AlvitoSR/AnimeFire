@@ -3,7 +3,7 @@ const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
 const BASE_URL = 'https://animefire.io';
 
 const SEARCH_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'User-Agent': 'Mozilla/5.0',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'pt-BR,pt;q=0.9',
     'Referer': BASE_URL + '/'
@@ -11,13 +11,12 @@ const SEARCH_HEADERS = {
 
 const VIDEO_HEADERS = {
     'X-Requested-With': 'XMLHttpRequest',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'User-Agent': 'Mozilla/5.0',
     'Referer': BASE_URL
 };
 
 const slugCache = new Map();
 
-// ─── Buscar anime (APENAS /animes/) ─────────────────────────
 async function searchAnimeFire(title) {
     const slug = titleToSlug(title);
     const url = `${BASE_URL}/pesquisar/${slug}`;
@@ -112,7 +111,7 @@ async function extractVideoStreams(rootSlug, episodeNum, isDubbed) {
                 return {
                     url: item.src,
                     name: `AnimeFire ${audioLabel} ${qualityLabel}`,
-                    title: `${audioLabel}`,
+                    title: audioLabel,
                     quality: quality,
                     type: item.src.includes('.m3u8') ? 'hls' : 'mp4',
                     headers: {
@@ -185,12 +184,24 @@ async function getAniListTitles(tmdbId, mediaType) {
     return titles;
 }
 
+function pickBest(streams, type) {
+    const filtered = streams
+        .filter(s => s.title === type)
+        .sort((a, b) => b.quality - a.quality);
+
+    if (filtered.length === 0) return [];
+
+    const best = filtered[0];
+    const fallback = filtered.find(s => s.quality < best.quality);
+
+    return fallback ? [best, fallback] : [best];
+}
+
 async function getStreams(tmdbId, mediaType, season, episode) {
     const targetSeason = mediaType === 'movie' ? 1 : season;
     const targetEpisode = mediaType === 'movie' ? 1 : episode;
 
     try {
-        // CACHE direto
         if (slugCache.has(tmdbId)) {
             return await extractVideoStreams(slugCache.get(tmdbId), targetEpisode, false);
         }
@@ -218,7 +229,6 @@ async function getStreams(tmdbId, mediaType, season, episode) {
             });
 
             let seasonMatches = validLinks.filter(item => item.season === targetSeason);
-
             if (seasonMatches.length === 0) {
                 seasonMatches = validLinks;
             }
@@ -231,13 +241,17 @@ async function getStreams(tmdbId, mediaType, season, episode) {
                 if (streams.length > 0) {
                     slugCache.set(tmdbId, item.rootSlug);
                     allStreams.push(...streams);
+                    break; // CRÍTICO: não misturar animes
                 }
             }
 
             if (allStreams.length > 0) break;
         }
 
-        return allStreams.sort((a, b) => b.quality - a.quality);
+        const legendado = pickBest(allStreams, 'Legendado');
+        const dublado = pickBest(allStreams, 'Dublado');
+
+        return [...legendado, ...dublado];
     } catch {
         return [];
     }
@@ -246,5 +260,5 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { getStreams };
 } else {
-    global.getStreams = getStreams;
+    globalThis.getStreams = getStreams;
 }
