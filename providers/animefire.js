@@ -39,14 +39,21 @@ async function searchAnimeFire(title) {
             const titleMatch = cardHtml.match(/animeTitle[^>]*>\s*([^<]+)</);
             if (!titleMatch) continue;
 
-            const rawSlug = fullUrl.replace(BASE_URL + '/', '').split('/')[1] || '';
-            if (!rawSlug.toLowerCase().includes('todos-os-episodios')) continue;
+            const urlObj = new URL(fullUrl);
+            const rawSlug = urlObj.pathname.split('/')[2]; // Pega o que vem depois de /animes/
+            
+            if (!rawSlug) continue;
             if (seen.has(fullUrl)) continue;
             seen.add(fullUrl);
 
             const displayTitle = titleMatch[1].trim();
             const isDubbed = rawSlug.toLowerCase().includes('dublado');
-            const rootSlug = rawSlug.replace(/-todos-os-episodios$/i, '');
+            
+            // Flexibiliza o rootSlug, pois nem sempre tem "-todos-os-episodios"
+            let rootSlug = rawSlug;
+            if (rawSlug.toLowerCase().includes('-todos-os-episodios')) {
+                rootSlug = rawSlug.replace(/-todos-os-episodios$/i, '');
+            }
 
             let season = detectSeason(rootSlug);
 
@@ -200,10 +207,36 @@ function pickBest(streams, type) {
 async function getStreams(tmdbId, mediaType, season, episode) {
     const targetSeason = mediaType === 'movie' ? 1 : season;
     const targetEpisode = mediaType === 'movie' ? 1 : episode;
+    
+    let absoluteEpisode = null;
+
+    // NOVO: Busca o número absoluto do episódio no TMDB (Essencial para One Piece, Naruto, etc)
+    if (mediaType === 'tv') {
+        try {
+            const epUrl = `${TMDB_BASE_URL}/tv/${tmdbId}/season/${targetSeason}/episode/${targetEpisode}?api_key=${TMDB_API_KEY}`;
+            const epResp = await fetch(epUrl);
+            if (epResp.ok) {
+                const epData = await epResp.json();
+                if (epData.absolute_episode_number) {
+                    absoluteEpisode = epData.absolute_episode_number;
+                }
+            }
+        } catch (e) {
+            console.error("Erro ao buscar episódio absoluto:", e);
+        }
+    }
 
     try {
+        // Cache Inteligente: Lembra se o anime usou numeração absoluta ou relativa no episódio anterior
         if (slugCache.has(tmdbId)) {
-            return await extractVideoStreams(slugCache.get(tmdbId), targetEpisode, false);
+            const cachedItems = slugCache.get(tmdbId);
+            const allStreams = [];
+            for (const item of cachedItems) {
+                const epToRequest = (item.useAbsolute && absoluteEpisode) ? absoluteEpisode : targetEpisode;
+                const streams = await extractVideoStreams(item.rootSlug, epToRequest, item.isDubbed);
+                allStreams.push(...streams);
+            }
+            if (allStreams.length > 0) return allStreams.sort((a, b) => b.quality - a.quality);
         }
 
         const titles = await getAniListTitles(tmdbId, mediaType);
@@ -211,6 +244,13 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
         const allStreams = [];
         const triedSlugs = new Set();
+        const successfulItems = [];
+
+        // Monta as opções de episódios para tentar no AnimeFire
+        const episodesToTry = [targetEpisode];
+        if (absoluteEpisode && absoluteEpisode !== targetEpisode) {
+            episodesToTry.push(absoluteEpisode); // Adiciona o número absoluto como prioridade/opção
+        }
 
         for (const titleInfo of titles) {
             const animeLinks = await searchAnimeFire(titleInfo.name);
@@ -221,37 +261,48 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
             const validLinks = animeLinks.filter(item => {
                 const slug = normalizeSlug(item.rootSlug);
-
                 if (slug.includes(normalizedSearch)) return true;
-
                 const matchesCount = titleWords.filter(word => slug.includes(word)).length;
                 return matchesCount >= Math.min(2, titleWords.length);
             });
 
+            // Separa links correspondentes à temporada exata e links genéricos (temporada 1/única)
             let seasonMatches = validLinks.filter(item => item.season === targetSeason);
-            if (seasonMatches.length === 0) {
-                seasonMatches = validLinks;
-            }
+            let baseMatches = validLinks.filter(item => item.season === 1 || !item.season);
 
-            for (const item of seasonMatches) {
+            let linksToTest = [...seasonMatches];
+            if (absoluteEpisode) linksToTest.push(...baseMatches);
+            if (linksToTest.length === 0) linksToTest = validLinks;
+            
+            // Remove duplicatas
+            linksToTest = [...new Map(linksToTest.map(item => [item.rootSlug, item])).values()];
+
+            for (const item of linksToTest) {
                 if (triedSlugs.has(item.rootSlug)) continue;
                 triedSlugs.add(item.rootSlug);
 
-                const streams = await extractVideoStreams(item.rootSlug, targetEpisode, item.isDubbed);
-                if (streams.length > 0) {
-                    slugCache.set(tmdbId, item.rootSlug);
-                    allStreams.push(...streams);
-                    break; // CRÍTICO: não misturar animes
+                // Testa tanto o episódio da temporada quanto o absoluto
+                for (const epNum of episodesToTry) {
+                    const streams = await extractVideoStreams(item.rootSlug, epNum, item.isDubbed);
+                    if (streams.length > 0) {
+                        successfulItems.push({ 
+                            rootSlug: item.rootSlug, 
+                            isDubbed: item.isDubbed,
+                            useAbsolute: epNum === absoluteEpisode 
+                        });
+                        allStreams.push(...streams);
+                        break; // Se encontrou com uma numeração, não tenta a outra para esse link
+                    }
                 }
             }
 
-            if (allStreams.length > 0) break;
+            if (allStreams.length > 0) {
+                slugCache.set(tmdbId, successfulItems);
+                break;
+            }
         }
 
-        const legendado = pickBest(allStreams, 'Legendado');
-        const dublado = pickBest(allStreams, 'Dublado');
-
-        return [...legendado, ...dublado];
+        return allStreams.sort((a, b) => b.quality - a.quality);
     } catch {
         return [];
     }
