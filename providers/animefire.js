@@ -5,7 +5,6 @@ const ANIMEFIRE_URL = 'https://animefire.io';
 const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'X-Requested-With': 'XMLHttpRequest'
 };
 
 function titleToSlug(title) {
@@ -17,29 +16,37 @@ function titleToSlug(title) {
 }
 
 async function getTMDBInfo(tmdbId) {
-    const url = `${TMDB_BASE_URL}/tv/${tmdbId}?api_key=${TMDB_API_KEY}&language=pt-BR`;
+    const url = `${TMDB_BASE_URL}/tv/${tmdbId}?api_key=${TMDB_API_KEY}&language=pt-BR&append_to_response=alternative_titles`;
     try {
         const response = await fetch(url);
         return await response.json();
     } catch { return null; }
 }
 
-// BUSCA AVANÇADA: Entra na página de pesquisa e extrai o slug do primeiro resultado
-async function fetchSlugBySearch(query) {
-    try {
-        const searchTerm = query.split('(')[0].trim(); // Remove anos ou parênteses
-        const searchUrl = `${ANIMEFIRE_URL}/pesquisar/${titleToSlug(searchTerm)}`;
-        const response = await fetch(searchUrl, { headers: HEADERS });
-        const html = await response.text();
-        
-        // Procura por links dentro das divs de posters do AnimeFire
-        const match = html.match(/<a href="https:\/\/animefire\.io\/animes\/([^"\/]+)"/);
-        if (match) return match[1];
-        
-        // Segunda tentativa com regex mais simples caso a primeira falhe
-        const altMatch = html.match(/\/animes\/([a-z0-9\-]+)/);
-        return altMatch ? altMatch[1] : null;
-    } catch { return null; }
+// BUSCA DE ALTO NÍVEL: Tenta encontrar o slug real no motor de busca do site
+async function getRealSlug(info) {
+    // Lista de nomes para tentar pesquisar no site
+    const searchQueries = [
+        info.name,
+        info.original_name,
+        ...(info.alternative_titles?.results?.map(t => t.title) || [])
+    ].filter(Boolean);
+
+    for (const query of searchQueries) {
+        try {
+            // O AnimeFire usa um sistema de busca via URL que retorna o HTML dos resultados
+            const cleanQuery = query.split(/[:(-]/)[0].trim(); // Pega apenas o nome principal
+            const searchUrl = `${ANIMEFIRE_URL}/pesquisar/${titleToSlug(cleanQuery)}`;
+            
+            const response = await fetch(searchUrl, { headers: HEADERS });
+            const html = await response.text();
+            
+            // Procura o link do anime no HTML (exatamente como o Cloudstream faz)
+            const match = html.match(/<a href="https:\/\/animefire\.io\/animes\/([^"\/]+)"/);
+            if (match && match[1]) return match[1];
+        } catch (e) { continue; }
+    }
+    return null;
 }
 
 async function getStreams(tmdbId, mediaType, season, episode) {
@@ -49,27 +56,20 @@ async function getStreams(tmdbId, mediaType, season, episode) {
         const info = await getTMDBInfo(tmdbId);
         if (!info) return [];
 
-        const slugsToTry = new Set();
+        // Descobre o slug real que o site usa (independente de ser japonês ou não)
+        const realSlug = await getRealSlug(info);
         
-        // 1. Tenta nomes diretos
+        const slugsToTry = new Set();
+        if (realSlug) slugsToTry.add(realSlug);
         slugsToTry.add(titleToSlug(info.name));
         if (info.original_name) slugsToTry.add(titleToSlug(info.original_name));
 
-        // 2. Tenta a busca real no site (Crucial para nomes japoneses)
-        const searchedSlug = await fetchSlugBySearch(info.name);
-        if (searchedSlug) slugsToTry.add(searchedSlug);
-        
-        if (info.original_name) {
-            const searchedOriginalSlug = await fetchSlugBySearch(info.original_name);
-            if (searchedOriginalSlug) slugsToTry.add(searchedOriginalSlug);
-        }
-
         for (const baseSlug of slugsToTry) {
-            // Variações de temporada conforme o padrão do site
             const variations = [
                 baseSlug,
                 `${baseSlug}-dublado`,
                 `${baseSlug}-${season}-temporada`,
+                `${baseSlug}-${season}-temporada-dublado`,
                 `${baseSlug}-season-${season}`,
                 `${baseSlug}-${season}`
             ];
@@ -87,15 +87,18 @@ async function getStreams(tmdbId, mediaType, season, episode) {
                 let apiUrl = videoSrcMatch[1];
                 if (apiUrl.startsWith('/')) apiUrl = ANIMEFIRE_URL + apiUrl;
 
-                const apiRes = await fetch(apiUrl, { headers: { ...HEADERS, 'Referer': pageUrl } });
+                const apiRes = await fetch(apiUrl, { 
+                    headers: { ...HEADERS, 'Referer': pageUrl, 'X-Requested-With': 'XMLHttpRequest' } 
+                });
+                
                 if (!apiRes.ok) continue;
-
                 const apiData = await apiRes.json();
+
                 if (apiData && apiData.data) {
                     return apiData.data.map(item => ({
                         url: item.src,
-                        name: `AnimeFire ${item.label || 'SD'}`,
-                        quality: item.label.includes('1080') ? 1080 : item.label.includes('720') ? 720 : 480,
+                        name: `AnimeFire ${item.label || 'Auto'}`,
+                        quality: parseInt(item.label) || 720,
                         type: item.src.includes('m3u8') ? 'hls' : 'mp4',
                         headers: {
                             'User-Agent': HEADERS['User-Agent'],
