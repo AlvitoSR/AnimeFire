@@ -4,7 +4,7 @@ const ANIMEFIRE_URL = 'https://animefire.io';
 
 const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Accept': 'application/json, text/javascript, */*; q=0.01',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'X-Requested-With': 'XMLHttpRequest'
 };
 
@@ -24,16 +24,21 @@ async function getTMDBInfo(tmdbId) {
     } catch { return null; }
 }
 
-// Tenta encontrar o slug real fazendo uma pesquisa no site (Lógica extraída do Cloudstream)
-async function searchAnimeSlug(query) {
+// BUSCA AVANÇADA: Entra na página de pesquisa e extrai o slug do primeiro resultado
+async function fetchSlugBySearch(query) {
     try {
-        const searchUrl = `${ANIMEFIRE_URL}/pesquisar/${titleToSlug(query)}`;
+        const searchTerm = query.split('(')[0].trim(); // Remove anos ou parênteses
+        const searchUrl = `${ANIMEFIRE_URL}/pesquisar/${titleToSlug(searchTerm)}`;
         const response = await fetch(searchUrl, { headers: HEADERS });
         const html = await response.text();
         
-        // Regex para capturar o primeiro link de anime da lista de busca
-        const match = html.match(/href="https:\/\/animefire\.io\/animes\/([^"\/]+)"/);
-        return match ? match[1] : null;
+        // Procura por links dentro das divs de posters do AnimeFire
+        const match = html.match(/<a href="https:\/\/animefire\.io\/animes\/([^"\/]+)"/);
+        if (match) return match[1];
+        
+        // Segunda tentativa com regex mais simples caso a primeira falhe
+        const altMatch = html.match(/\/animes\/([a-z0-9\-]+)/);
+        return altMatch ? altMatch[1] : null;
     } catch { return null; }
 }
 
@@ -46,22 +51,27 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
         const slugsToTry = new Set();
         
-        // 1. Tenta nomes baseados no TMDB
+        // 1. Tenta nomes diretos
         slugsToTry.add(titleToSlug(info.name));
         if (info.original_name) slugsToTry.add(titleToSlug(info.original_name));
 
-        // 2. BUSCA DE EMERGÊNCIA: Pesquisa o nome real no site para garantir
-        const searchResult = await searchAnimeSlug(info.name);
-        if (searchResult) slugsToTry.add(searchResult);
+        // 2. Tenta a busca real no site (Crucial para nomes japoneses)
+        const searchedSlug = await fetchSlugBySearch(info.name);
+        if (searchedSlug) slugsToTry.add(searchedSlug);
+        
+        if (info.original_name) {
+            const searchedOriginalSlug = await fetchSlugBySearch(info.original_name);
+            if (searchedOriginalSlug) slugsToTry.add(searchedOriginalSlug);
+        }
 
         for (const baseSlug of slugsToTry) {
-            // Gera variações de temporada para cada slug
+            // Variações de temporada conforme o padrão do site
             const variations = [
                 baseSlug,
                 `${baseSlug}-dublado`,
                 `${baseSlug}-${season}-temporada`,
-                `${baseSlug}-${season}-temporada-dublado`,
-                `${baseSlug}-season-${season}`
+                `${baseSlug}-season-${season}`,
+                `${baseSlug}-${season}`
             ];
 
             for (const slug of variations) {
@@ -84,8 +94,8 @@ async function getStreams(tmdbId, mediaType, season, episode) {
                 if (apiData && apiData.data) {
                     return apiData.data.map(item => ({
                         url: item.src,
-                        name: `AnimeFire ${item.label || '720p'}`,
-                        quality: item.label.includes('1080') ? 1080 : item.label.includes('480') ? 480 : 720,
+                        name: `AnimeFire ${item.label || 'SD'}`,
+                        quality: item.label.includes('1080') ? 1080 : item.label.includes('720') ? 720 : 480,
                         type: item.src.includes('m3u8') ? 'hls' : 'mp4',
                         headers: {
                             'User-Agent': HEADERS['User-Agent'],
