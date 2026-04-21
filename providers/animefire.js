@@ -5,6 +5,7 @@ const ANIMEFIRE_URL = 'https://animefire.io';
 const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
 };
 
 function titleToSlug(title) {
@@ -52,9 +53,12 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
         const realSlug = await getRealSlug(info);
         const slugsToTry = new Set();
+        
         if (realSlug) slugsToTry.add(realSlug);
         slugsToTry.add(titleToSlug(info.name));
         if (info.original_name) slugsToTry.add(titleToSlug(info.original_name));
+
+        const results = [];
 
         for (const baseSlug of slugsToTry) {
             const variations = [
@@ -68,42 +72,59 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
             for (const slug of variations) {
                 const pageUrl = `${ANIMEFIRE_URL}/animes/${slug}/${episode}`;
-                const response = await fetch(pageUrl, { headers: { ...HEADERS, 'Referer': ANIMEFIRE_URL } });
-
-                if (!response.ok) continue;
-                const html = await response.text();
-
-                const videoSrcMatch = html.match(/data-video-src="([^"]+)"/);
-                if (!videoSrcMatch) continue;
-
-                let apiUrl = videoSrcMatch[1];
-                if (apiUrl.startsWith('/')) apiUrl = ANIMEFIRE_URL + apiUrl;
-
-                const apiRes = await fetch(apiUrl, { 
-                    headers: { ...HEADERS, 'Referer': pageUrl, 'X-Requested-With': 'XMLHttpRequest' } 
-                });
                 
-                if (!apiRes.ok) continue;
-                const apiData = await apiRes.json();
+                try {
+                    const response = await fetch(pageUrl, { 
+                        headers: { ...HEADERS, 'Referer': ANIMEFIRE_URL } 
+                    });
 
-                if (apiData && apiData.data) {
-                    return apiData.data.map(item => ({
-                        url: item.src,
-                        name: `AnimeFire ${item.label || 'Auto'}`,
-                        quality: parseInt(item.label) || 720,
-                        type: item.src.includes('m3u8') ? 'hls' : 'mp4',
-                        // CORREÇÃO DO ERRO 22001 AQUI:
-                        headers: {
-                            'User-Agent': HEADERS['User-Agent'],
-                            'Referer': 'https://animefire.io/',
-                            'Origin': 'https://animefire.io',
-                            'Accept': '*/*'
+                    if (!response.ok) continue;
+                    const html = await response.text();
+
+                    const videoSrcMatch = html.match(/data-video-src="([^"]+)"/);
+                    if (!videoSrcMatch) continue;
+
+                    let apiUrl = videoSrcMatch[1];
+                    if (apiUrl.startsWith('/')) apiUrl = ANIMEFIRE_URL + apiUrl;
+
+                    // Requisição para a API que gera os links de vídeo
+                    const apiRes = await fetch(apiUrl, { 
+                        headers: { 
+                            ...HEADERS, 
+                            'Referer': pageUrl, 
+                            'X-Requested-With': 'XMLHttpRequest' 
+                        } 
+                    });
+                    
+                    if (!apiRes.ok) continue;
+                    const apiData = await apiRes.json();
+
+                    if (apiData && apiData.data) {
+                        const mappedStreams = apiData.data.map(item => ({
+                            url: item.src,
+                            name: `AnimeFire ${item.label || '720p'}`,
+                            quality: parseInt(item.label) || 720,
+                            type: item.src.includes('m3u8') ? 'hls' : 'mp4',
+                            // ESSENCIAIS PARA CORRIGIR ERRO 22001
+                            headers: {
+                                'User-Agent': HEADERS['User-Agent'],
+                                'Referer': 'https://animefire.io/',
+                                'Origin': 'https://animefire.io',
+                                'Accept': '*/*',
+                                'Connection': 'keep-alive'
+                            }
+                        }));
+                        
+                        if (mappedStreams.length > 0) {
+                            return mappedStreams.sort((a, b) => b.quality - a.quality);
                         }
-                    })).sort((a, b) => b.quality - a.quality);
-                }
+                    }
+                } catch (e) { continue; }
             }
         }
-    } catch (e) { console.error(e); }
+    } catch (e) {
+        console.error("Erro no provider AnimeFire:", e);
+    }
     return [];
 }
 
