@@ -1,24 +1,19 @@
 {
-  "id": "animefire",
-  "name": "AnimeFire",
-  "description": "Assista animes legendados e dublados via AnimeFire",
+  "name": "Anime fire",
   "version": "1.0.0",
-  "author": "SeuNome",
-  "supportedTypes": [
-    "tv"
-  ],
-  "filename": "providers/animefire.js",
-  "enabled": true,
-  "contentLanguage": [
-    "pt-br"
-  ],
-  "formats": [
-    "mp4",
-    "hls"
-  ],
-  "tags": [
-    "anime",
-    "legendado",
-    "dublado"
+  "scrapers": [
+    {
+      "id": "animefire-plugin",
+      "name": "AnimeFire",
+      "description": "Plugin para o site AnimeFire.io",
+      "version": "1.0.0",
+      "author": "Alvitosr",
+      "supportedTypes": ["tv"],
+      "filename": "providers/animefire.js",
+      "enabled": true,
+      "contentLanguage": ["pt-br"],
+      "formats": ["mp4", "hls"],
+      "tags": ["anime", "pt-br"]
+    }
   ]
 }
