@@ -58,16 +58,15 @@ async function getStreams(tmdbId, mediaType, season, episode) {
         slugsToTry.add(titleToSlug(info.name));
         if (info.original_name) slugsToTry.add(titleToSlug(info.original_name));
 
-        const results = [];
-
         for (const baseSlug of slugsToTry) {
+            // Variações específicas para encontrar Attack on Titan S2 e outros
             const variations = [
                 baseSlug,
-                `${baseSlug}-dublado`,
+                `${baseSlug}-season-${season}`, // Caso específico: shingeki-no-kyojin-season-2
                 `${baseSlug}-${season}-temporada`,
-                `${baseSlug}-${season}-temporada-dublado`,
-                `${baseSlug}-season-${season}`,
-                `${baseSlug}-${season}`
+                `${baseSlug}-${season}`,
+                `${baseSlug}-dublado`,
+                `${baseSlug}-season-${season}-dublado`
             ];
 
             for (const slug of variations) {
@@ -87,25 +86,19 @@ async function getStreams(tmdbId, mediaType, season, episode) {
                     let apiUrl = videoSrcMatch[1];
                     if (apiUrl.startsWith('/')) apiUrl = ANIMEFIRE_URL + apiUrl;
 
-                    // Requisição para a API que gera os links de vídeo
                     const apiRes = await fetch(apiUrl, { 
-                        headers: { 
-                            ...HEADERS, 
-                            'Referer': pageUrl, 
-                            'X-Requested-With': 'XMLHttpRequest' 
-                        } 
+                        headers: { ...HEADERS, 'Referer': pageUrl, 'X-Requested-With': 'XMLHttpRequest' } 
                     });
                     
                     if (!apiRes.ok) continue;
                     const apiData = await apiRes.json();
 
                     if (apiData && apiData.data) {
-                        const mappedStreams = apiData.data.map(item => ({
+                        return apiData.data.map(item => ({
                             url: item.src,
-                            name: `AnimeFire ${item.label || '720p'}`,
-                            quality: parseInt(item.label) || 720,
+                            name: `AnimeFire ${item.label || 'FHD'}`,
+                            quality: item.label.includes('1080') ? 1080 : 720,
                             type: item.src.includes('m3u8') ? 'hls' : 'mp4',
-                            // ESSENCIAIS PARA CORRIGIR ERRO 22001
                             headers: {
                                 'User-Agent': HEADERS['User-Agent'],
                                 'Referer': 'https://animefire.io/',
@@ -113,18 +106,12 @@ async function getStreams(tmdbId, mediaType, season, episode) {
                                 'Accept': '*/*',
                                 'Connection': 'keep-alive'
                             }
-                        }));
-                        
-                        if (mappedStreams.length > 0) {
-                            return mappedStreams.sort((a, b) => b.quality - a.quality);
-                        }
+                        })).sort((a, b) => b.quality - a.quality);
                     }
                 } catch (e) { continue; }
             }
         }
-    } catch (e) {
-        console.error("Erro no provider AnimeFire:", e);
-    }
+    } catch (e) { console.error(e); }
     return [];
 }
 
