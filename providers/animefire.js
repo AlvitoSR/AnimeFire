@@ -23,9 +23,7 @@ async function getTMDBInfo(tmdbId) {
     } catch { return null; }
 }
 
-// BUSCA DE ALTO NÍVEL: Tenta encontrar o slug real no motor de busca do site
 async function getRealSlug(info) {
-    // Lista de nomes para tentar pesquisar no site
     const searchQueries = [
         info.name,
         info.original_name,
@@ -34,14 +32,10 @@ async function getRealSlug(info) {
 
     for (const query of searchQueries) {
         try {
-            // O AnimeFire usa um sistema de busca via URL que retorna o HTML dos resultados
-            const cleanQuery = query.split(/[:(-]/)[0].trim(); // Pega apenas o nome principal
+            const cleanQuery = query.split(/[:(-]/)[0].trim();
             const searchUrl = `${ANIMEFIRE_URL}/pesquisar/${titleToSlug(cleanQuery)}`;
-            
             const response = await fetch(searchUrl, { headers: HEADERS });
             const html = await response.text();
-            
-            // Procura o link do anime no HTML (exatamente como o Cloudstream faz)
             const match = html.match(/<a href="https:\/\/animefire\.io\/animes\/([^"\/]+)"/);
             if (match && match[1]) return match[1];
         } catch (e) { continue; }
@@ -55,30 +49,8 @@ async function getStreams(tmdbId, mediaType, season, episode) {
     try {
         const info = await getTMDBInfo(tmdbId);
         if (!info) return [];
-// ... (mantenha o topo do código igual até a parte do return dentro do getStreams)
 
-                if (apiData && apiData.data) {
-                    return apiData.data.map(item => {
-                        // O erro 22001 ocorre aqui: precisamos forçar os headers no stream
-                        return {
-                            url: item.src,
-                            name: `AnimeFire ${item.label || 'Auto'}`,
-                            quality: parseInt(item.label) || 720,
-                            type: item.src.includes('m3u8') ? 'hls' : 'mp4',
-                            // ESTA PARTE É VITAL PARA O ERRO 22001:
-                            headers: {
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                                'Referer': 'https://animefire.io/', 
-                                'Origin': 'https://animefire.io',
-                                'Accept': '*/*'
-                            }
-                        };
-                    }).sort((a, b) => b.quality - a.quality);
-                }
-// ... (resto do código igual)
-        // Descobre o slug real que o site usa (independente de ser japonês ou não)
         const realSlug = await getRealSlug(info);
-        
         const slugsToTry = new Set();
         if (realSlug) slugsToTry.add(realSlug);
         slugsToTry.add(titleToSlug(info.name));
@@ -120,9 +92,12 @@ async function getStreams(tmdbId, mediaType, season, episode) {
                         name: `AnimeFire ${item.label || 'Auto'}`,
                         quality: parseInt(item.label) || 720,
                         type: item.src.includes('m3u8') ? 'hls' : 'mp4',
+                        // CORREÇÃO DO ERRO 22001 AQUI:
                         headers: {
                             'User-Agent': HEADERS['User-Agent'],
-                            'Referer': pageUrl
+                            'Referer': 'https://animefire.io/',
+                            'Origin': 'https://animefire.io',
+                            'Accept': '*/*'
                         }
                     })).sort((a, b) => b.quality - a.quality);
                 }
