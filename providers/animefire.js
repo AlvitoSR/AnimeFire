@@ -55,7 +55,27 @@ async function getStreams(tmdbId, mediaType, season, episode) {
     try {
         const info = await getTMDBInfo(tmdbId);
         if (!info) return [];
+// ... (mantenha o topo do código igual até a parte do return dentro do getStreams)
 
+                if (apiData && apiData.data) {
+                    return apiData.data.map(item => {
+                        // O erro 22001 ocorre aqui: precisamos forçar os headers no stream
+                        return {
+                            url: item.src,
+                            name: `AnimeFire ${item.label || 'Auto'}`,
+                            quality: parseInt(item.label) || 720,
+                            type: item.src.includes('m3u8') ? 'hls' : 'mp4',
+                            // ESTA PARTE É VITAL PARA O ERRO 22001:
+                            headers: {
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                                'Referer': 'https://animefire.io/', 
+                                'Origin': 'https://animefire.io',
+                                'Accept': '*/*'
+                            }
+                        };
+                    }).sort((a, b) => b.quality - a.quality);
+                }
+// ... (resto do código igual)
         // Descobre o slug real que o site usa (independente de ser japonês ou não)
         const realSlug = await getRealSlug(info);
         
